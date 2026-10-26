@@ -4,6 +4,11 @@ Chord Pleasantness Experiment
 PsychoPy experiment for in-person study of chord pleasantness ratings
 with Pupil Labs (Pupil Capture) pupillometry integration.
 
+Session flow:
+  Consent -> Audio adjustment -> Instructions -> Pupil baseline -> Practice trial
+  -> Block 1 (first half of STIMULI_DIR) -> Demographics -> BMRQ
+  -> Block 2 (second half) -> Gold-MSI
+
 Structure per trial:
   1. Audio file plays (countdown + chords at 2.4s each; length read from the file)
   2. Continuous pleasantness slider active throughout (advance LOCKED until audio ends)
@@ -12,558 +17,358 @@ Structure per trial:
   5. After that: overall arousal rating (1-6)  <-- NEW addition
   6. Repeat for every .wav in STIMULI_DIR (random order)
 
-After all trials:
-  - Demographics (Gold-MSI / BMRQ typically delivered via Qualtrics)
-
 Requirements:
   pip install pyzmq
 
-Pupil Capture must be running before the experiment starts.
-Set PUPIL_CAPTURE_IP below if Pupil Capture is on a different machine.
-
-Monitor setup:
-  Before running, open PsychoPy Monitor Center and create/confirm a monitor
-  profile named 'testMonitor' with your screen's physical dimensions and
-  resolution. PsychoPy handles all scaling automatically from there.
+Settings live in config.py (set MACHINE = "booth" or "laptop"); participant-facing
+text in survey_content.py; output files are described in data_logging.py.
+When USE_PUPIL=TRUE, Pupil Capture must be running before the experiment starts.
+Set PUPIL_CAPTURE_IP if Pupil Capture is on a different machine.
 """
-from psychopy import prefs
-# do sound test to find the right device name
-prefs.hardware['audioLib'] = ['ptb', 'sounddevice']
-prefs.hardware['audioDevice'] = 'Speakers (Realtek(R) Audio)'
+import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-from psychopy import visual, core, event, sound, gui, monitors
-import zmq
-import csv
+import config
+from psychopy import prefs
+# audio prefs must be set before psychopy.sound is imported
+prefs.hardware["audioLib"] = config.AUDIO_LIB
+if config.AUDIO_DEVICE:
+    prefs.hardware["audioDevice"] = config.AUDIO_DEVICE
+
+import glob
+import itertools
+import platform
 import random
 from datetime import datetime
-import os
-import glob
-os.chdir(os.path.dirname(os.path.abspath(__file__))) #sets dir to THIS
-from time import sleep
-import msgpack
-# NOTE: the old prefs.hardware['audioDevice'] = 'MacBook Pro Speakers' line was removed.
-# It was Mac-only, and it ran AFTER `sound` was imported, so it had no effect anyway.
-# To pick a specific device, set prefs BEFORE `from psychopy import sound`.
+
+import psychopy
+from psychopy import visual, core, sound, gui, monitors
+
+import screens
+import survey_content as content
+import ui
+from data_logging import SessionLogs
+from pupil import PupilCapture
 
 # ─────────────────────────────────────────────
-# CONFIGURATION — edit these before running
-# ─────────────────────────────────────────────
-
-STIMULI_DIR  = "test_audio"                            # folder (next to this script) holding the .wav files; every *.wav is used
-OUTPUT_DIR   = "data"                                  # folder where output CSVs will be saved
-
-MONITOR_NAME = "testMonitor"      # must match a profile in PsychoPy Monitor Center
-
-CHORD_DURATION      = 2.4         # seconds per chord
-N_COUNTDOWN_TICKS   = 4           # ticks embedded at start of each audio file
-COUNTDOWN_DURATION = 4.8          # tonic chord (2.4s) + one bar of 4 clicks (2.4s)
-#chord num =/
-
-USE_PUPIL           = False        # False = skip Pupil Capture entirely (testing on a computer without it)
-PUPIL_CAPTURE_IP    = "127.0.0.1" # change if Pupil Capture is on another machine
-PUPIL_CAPTURE_PORT  = 50020
-
-SLIDER_SAMPLING_HZ  = 5          # how often per second to log continuous slider
-
-# ─────────────────────────────────────────────
-# PUPIL CAPTURE HELPERS
-# ─────────────────────────────────────────────
-    
-def connect_to_pupil_capture(ip, port):
-    ctx = zmq.Context()
-    # REQ socket for commands
-    remote = ctx.socket(zmq.REQ)
-    remote.setsockopt(zmq.RCVTIMEO, 10000)
-    remote.setsockopt(zmq.SNDTIMEO, 10000)
-    remote.connect(f"tcp://{ip}:{port}")
-    # get PUB port
-    remote.send_string("PUB_PORT")
-    pub_port = remote.recv_string()
-    # PUB socket for annotations
-    pub = ctx.socket(zmq.PUB) 
-    pub.connect(f"tcp://{ip}:{pub_port}")
-    # sync clocks
-    remote.send_string("T " + str(core.monotonicClock.getTime()))
-    remote.recv_string()
-    return ctx, remote, pub, pub_port
-
-def send_annotation(pub_sock, label):
-    annotation = {
-        "topic": "annotation",
-        "label": label,
-        "timestamp": core.monotonicClock.getTime(),
-        "duration": CHORD_DURATION,
-    }
-    payload = msgpack.dumps(annotation, use_bin_type=True)
-    pub_sock.send_string(annotation["topic"], flags=zmq.SNDMORE)
-    pub_sock.send(payload)
-
-def enable_annotation_plugin(remote):
-    """Ask Pupil Capture to load the Annotation Capture plugin.
-    Without this plugin Capture receives the annotations but does NOT write
-    them into the recording (annotation.pldata)."""
-    notification = {"subject": "start_plugin", "name": "Annotation_Capture", "args": {}}
-    remote.send_string("notify.start_plugin", flags=zmq.SNDMORE)
-    remote.send(msgpack.dumps(notification, use_bin_type=True))
-    return remote.recv_string()
-
-def start_pupil_recording(remote, session_name):
-    remote.send_string(f"R {session_name}")
-    _ = remote.recv_string()
-
-def stop_pupil_recording(remote):
-    remote.send_string("r")
-    _ = remote.recv_string()
-
-# ─────────────────────────────────────────────
-# CONTINUOUS SLIDER (reads the mouse directly)
-# ─────────────────────────────────────────────
-
-DEBUG_SLIDER = False   # True = print the value every time it changes
-
-class ContinuousSlider:
-
-    def __init__(self, win, mouse, pos=(0, -0.45), width=1.5,
-                 vmin=-100, vmax=100, start=0, click_height=0.25):
-        self.win, self.mouse = win, mouse
-        self.vmin, self.vmax, self.start = vmin, vmax, start
-        self.width, self.y = width, pos[1]
-        self.x0 = pos[0] - width / 2
-        self.click_height = click_height     # +/- vertical tolerance for starting a drag
-        self.line = visual.Rect(win, width=width, height=0.012, pos=pos,
-                                fillColor="white", lineColor="white")
-        self.ticks, self.labels = [], []
-        for val, text in [(vmin, "Very Unpleasant\n-100"),
-                          ((vmin + vmax) / 2, "Neutral\n0"),
-                          (vmax, "Very Pleasant\n100")]:
-            x = self._val_to_x(val)
-            self.ticks.append(visual.Rect(win, width=0.006, height=0.06, pos=(x, self.y),
-                                          fillColor="white", lineColor="white"))
-            self.labels.append(visual.TextStim(win, text=text, pos=(x, self.y - 0.12),
-                                               height=0.04, color=[0.6, 0.6, 0.6],
-                                               wrapWidth=0.5))
-        self.marker = visual.Rect(win, width=0.02, height=0.1, pos=(0, self.y),
-                                  fillColor="lightblue", lineColor="white")
-        self.reset()
-
-    def _val_to_x(self, v):
-        return self.x0 + (v - self.vmin) / (self.vmax - self.vmin) * self.width
-
-    def reset(self):
-        self.value, self.touched, self._dragging = self.start, False, False
-        self.marker.pos = (self._val_to_x(self.value), self.y)
-
-    def update(self):
-        """Call once per frame, before getRating()."""
-        pressed = self.mouse.getPressed()[0]
-        x, y = self.mouse.getPos()
-        if pressed:
-            if (not self._dragging
-                    and abs(y - self.y) <= self.click_height
-                    and self.x0 - 0.05 <= x <= self.x0 + self.width + 0.05):
-                self._dragging = True
-            if self._dragging:
-                frac = min(max((x - self.x0) / self.width, 0.0), 1.0)
-                new = self.vmin + frac * (self.vmax - self.vmin)
-                if DEBUG_SLIDER and new != self.value:
-                    print(f"slider value={new:.1f}")
-                self.value, self.touched = new, True
-                self.marker.pos = (self._val_to_x(new), self.y)
-        else:
-            self._dragging = False
-
-    def getRating(self):
-        """None until the participant has touched the slider."""
-        return self.value if self.touched else None
-
-    def draw(self):
-        self.line.draw()
-        for t in self.ticks:
-            t.draw()
-        for l in self.labels:
-            l.draw()
-        self.marker.draw()
-
-# ─────────────────────────────────────────────
-# PARTICIPANT INFO DIALOG
+# SETUP
 # ─────────────────────────────────────────────
 
 def get_participant_info():
-    dlg = gui.Dlg(title="Chord Pleasantness Study")
-    dlg.addField("Participant ID:")
-    dlg.addField("Session:")
-    info = dlg.show()
-    if not dlg.OK:
-        core.quit()
-    return {"participant_id": info[0], "session": info[1] or "1"}
+    """Experimenter dialog; re-asks until the participant ID is usable in a file name."""
+    error = ""
+    while True:
+        dlg = gui.Dlg(title="Chord Pleasantness Study")
+        if error:
+            dlg.addText(error)
+        dlg.addField("Participant ID:")
+        dlg.addField("Session:", "1")
+        info = dlg.show()
+        if not dlg.OK:
+            core.quit()
+        pid, session = str(info[0]).strip(), str(info[1]).strip() or "1"
+        if pid and all(c.isalnum() or c in "-_" for c in pid + session):
+            return pid, session
+        error = "Use letters, digits, '-' or '_' only."
 
-# ─────────────────────────────────────────────
-# LOAD STIMULI
-# ─────────────────────────────────────────────
 
-def load_stimuli(stim_dir):
+def sequence_id(path):
+    """'1_24' for 1_24_Bb_O.wav, 1_24_Bb_S.wav, 1_24_Bb_O_inv.wav, ... (every version of a sequence)."""
+    return "_".join(os.path.basename(path).split("_")[:2])
+
+
+def load_stimuli(stim_dir, rng, max_tries=10000):
+    """
+    All .wav paths in stim_dir, shuffled with the session's seeded RNG so that no two
+    consecutive files share a sequence_id. Reshuffling until that holds keeps every valid
+    order equally likely; about 1 in 5 shuffles of the 38 study stimuli passes.
+    """
     paths = sorted(glob.glob(os.path.join(stim_dir, "*.wav")))
     if not paths:
         raise FileNotFoundError(f"No .wav files found in '{os.path.abspath(stim_dir)}'")
-    stimuli = [{"audio_file": os.path.basename(p)} for p in paths]
-    random.shuffle(stimuli)
-    return stimuli
+    for _ in range(max_tries):
+        rng.shuffle(paths)
+        if all(sequence_id(a) != sequence_id(b) for a, b in zip(paths, paths[1:])):
+            return paths
+    raise RuntimeError(f"No order of '{stim_dir}' avoids back-to-back versions of a sequence; "
+                       "are the files named like 1_24_Bb_O.wav?")
 
-# ─────────────────────────────────────────────
-# OVERALL RATING SCREEN
-# ─────────────────────────────────────────────
 
-def get_overall_rating(win, prompt_text, slider):
-    """
-    Show a 1-6 rating slider. Confirm button is greyed out until
-    participant makes a selection, matching the Qualtrics behaviour.
-    """
-    prompt = visual.TextStim(
-        win, text=prompt_text,
-        pos=(0, 0.4), height=0.055, color="white",
-        wrapWidth=1.6, alignText="center"
-    )
-    # Active confirm button (blue, matches Qualtrics arrow style)
-    confirm_active = visual.Rect(
-        win, width=0.22, height=0.09, pos=(0.75, -0.85),
-        fillColor=[0.18, 0.45, 0.78], lineColor="white"
-    )
-    # Inactive confirm button (grey, before selection)
-    confirm_inactive = visual.Rect(
-        win, width=0.22, height=0.09, pos=(0.75, -0.85),
-        fillColor=[0.5, 0.5, 0.5], lineColor=[0.5, 0.5, 0.5]
-    )
-    confirm_arrow = visual.TextStim(
-        win, text="Submit", pos=(0.75, -0.85),
-        height=0.05, color="white"
-    )
+def shuffled_range(n, rng):
+    order = list(range(n))
+    rng.shuffle(order)
+    return order
 
-    slider.reset()
-    mouse = event.Mouse(win=win)
 
-    while True:
-        rating     = slider.getRating()
-        has_rating = rating is not None
+def build_stimulus_plan(rng):
+    """Block name -> ordered stimulus paths. Fails before the session starts if files are missing."""
+    for name in ("PRACTICE_STIMULUS", "VOLUME_CHECK_STIMULUS"):
+        path = getattr(config, name)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"{name} not found: '{os.path.abspath(path)}'")
+    main = load_stimuli(config.STIMULI_DIR, rng)
+    half = len(main) // 2
+    return {
+        "practice":  [config.PRACTICE_STIMULUS],
+        "main_1":    main[:half],
+        "main_2":    main[half:],
+    }
 
-        prompt.draw()
-        slider.draw()
-        if has_rating:
-            confirm_active.draw()
-        else:
-            confirm_inactive.draw()
-        confirm_arrow.draw()
-        win.flip()
 
-        if has_rating and mouse.isPressedIn(confirm_active):
-            core.wait(0.2)
-            return rating
-
-        if event.getKeys(["escape"]):
-            core.quit()
-
-# ─────────────────────────────────────────────
-# MAIN EXPERIMENT
-# ─────────────────────────────────────────────
-
-def run_experiment():
-
-    # ── participant info ──
-    p_info  = get_participant_info()
-    pid     = p_info["participant_id"]
-    session = p_info["session"]
-
-    # ── output CSV ──
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    timestamp   = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = os.path.join(OUTPUT_DIR, f"sub-{pid}_ses-{session}_{timestamp}.csv")
-
-    fieldnames = [
-        "participant_id", "session", "trial_num", "trial_id",
-        "stimulus_file",
-        "audio_duration",
-        "n_chords",
-        "sample_time",
-        "chord_num_at_sample",
-        "pleasantness_continuous",
-        "overall_pleasantness",
-        "overall_arousal",
-    ]
-    csvfile = open(output_file, "w", newline="")
-    writer  = csv.DictWriter(csvfile, fieldnames=fieldnames)
-    writer.writeheader()
-
-    # ── connect to Pupil Capture ──
-    print("Connecting to Pupil Capture...")
-    try:
-        if not USE_PUPIL:
-            raise RuntimeError("USE_PUPIL = False")
-        zmq_ctx, zmq_remote, zmq_pub, zmq_pub_port = connect_to_pupil_capture(PUPIL_CAPTURE_IP, PUPIL_CAPTURE_PORT)
-        pupil_connected   = True
-        print("Connected to Pupil Capture.")
-        try:
-            print("Annotation plugin:", enable_annotation_plugin(zmq_remote))
-            sleep(0.5)
-        except Exception as e:
-            print(f"WARNING: could not auto-enable Annotation Capture ({e}). "
-                  "Enable it manually in Pupil Capture > Plugin Manager.")
-        #start_pupil_recording(zmq_remote, f"sub-{pid}_ses-{session}")#test remove
-    except Exception as e:
-        print(f"Pupil Capture not used ({e}). Continuing without pupillometry.")
-        pupil_connected = False
-
-    # ── window (uses Monitor Center profile for resolution) ──
-    mon = monitors.Monitor(MONITOR_NAME)
+def open_window():
     win = visual.Window(
-        fullscr=False, # XXX for debugging. Switch back for experiment
-        monitor=mon,
-        color="black",
+        fullscr=config.FULLSCREEN, 
+        monitor=monitors.Monitor(config.MONITOR_NAME),
+        color="black", 
         units="norm"
     )
     win.mouseVisible = True
+    win.recordFrameIntervals = True   # enables win.nDroppedFrames for the per-trial timing check
+    return win
 
-    # ── continuous pleasantness slider ──
-    # Matches Qualtrics version: -100 to 100, starts at 0, fully continuous
-    mouse = event.Mouse(win=win)
-    continuous_slider = ContinuousSlider(win, mouse)
-    
-    rating_label = visual.TextStim(
-        win, text="Rating",
-        pos=(-0.75, -0.33), height=0.04,
-        color=[0.6, 0.6, 0.6], anchorHoriz="left"
-    )
 
-    listen_instruction = visual.TextStim(
-        win,
-        text=(
-            "After the 4-click countdown, move the slider to indicate how pleasant or\n"
-            "unpleasant you find the sounds as you listen to the recording in real time.\n\n"
-            "Evaluate \"pleasantness\" in terms of aesthetics rather than emotions."
-        ),
-        pos=(0, 0.55), height=0.05,
-        color="white", wrapWidth=1.7, alignText="center"
-    )
+def config_snapshot():
+    return {name: getattr(config, name) for name in dir(config) if name.isupper()}
 
-    locked_msg = visual.TextStim(
-        win,
-        text="You will be able to continue once the track has finished playing.",
-        pos=(0, -0.75), height=0.04,
-        color=[0.6, 0.6, 0.6]
-    )
+# ─────────────────────────────────────────────
+# TRIAL
+# ─────────────────────────────────────────────
 
-    # ── overall rating slider (1-6) ──
-    overall_slider = visual.Slider(
-        win,
-        ticks=(1, 2, 3, 4, 5, 6),
-        labels=["1", "2", "3", "4", "5", "6"],
-        startValue=None,
-        pos=(0, 0),
-        size=(1.2, 0.07),
-        style="rating",
-        color="white",
-        fillColor=[0.4, 0.65, 0.9],
-        borderColor="white",
-        labelColor="white",
-        font="Arial",
-        labelHeight=0.05,
-        granularity=1
-    )
+def chord_at(t, n_chords):
+    """1-based chord playing at trial time t, or None during the countdown."""
+    if t < config.COUNTDOWN_DURATION or n_chords == 0:
+        return None
+    idx = int((t - config.COUNTDOWN_DURATION) / config.CHORD_DURATION)
+    return max(1, min(idx + 1, n_chords))
 
-    # ── instructions ──
-    instructions = visual.TextStim(
-        win,
-        text=(
-            "Welcome!\n\n"
-            "You will listen to a series of chord sequences. As each chord plays, " 
-            "use the slider to continuously rate how pleasant or unpleasant it sounds.\n\n"
-            "Please evaluate \"pleasantness\" in terms of aesthetics "
-            "rather than emotions. "
-            "After each sequence you will give two overall ratings for the chord sequence "
-            "as a whole: one for pleasantness, and one for perceived arousal.\n\n"
-            "Please adjust your headphone volume to a "
-            "comfortable level now.\n\n"
-            "Press SPACE to begin."
-        ),
-        pos=(0, 0), height=0.055,
-        color="white", wrapWidth=1.6, alignText="center"
-    )
-    instructions.draw()
+
+def play_with_continuous_rating(win, listening_screen, pupil, audio, trial_num, n_chords, samples):
+    """
+    Plays the stimulus while sampling the continuous slider. Appends (trial_time,
+    rating or None) to `samples` in place, so the caller keeps them even if the
+    quit key interrupts playback. Returns (audio_onset_time, skipped).
+    """
+    chord_onset_times = [config.COUNTDOWN_DURATION + c * config.CHORD_DURATION
+                         for c in range(n_chords)]
+    sample_period = 1.0 / config.SLIDER_SAMPLING_HZ
+    next_sample_time = config.COUNTDOWN_DURATION
+    next_chord_idx = 0
+    skipped = False
+    listening_screen.reset()
+
+    # audio onset and clock zero are both locked to the first screen flip,
+    # so chord_onset_times line up with what the participant actually hears
+    trial_clock = core.Clock()
+    win.callOnFlip(audio.play)
+    win.callOnFlip(trial_clock.reset)
     win.flip()
-    event.waitKeys(keyList=["space"])
+    audio_onset_time = core.monotonicClock.getTime() - trial_clock.getTime()
+
+    duration = audio.getDuration()
+    while True:
+        t = trial_clock.getTime()
+        if t >= duration + 0.1:
+            break
+
+        # Pupil Capture annotation at each chord onset
+        if next_chord_idx < n_chords and t >= chord_onset_times[next_chord_idx]:
+            next_chord_idx += 1
+            pupil.annotate(f"trial_{trial_num}_chord_{next_chord_idx}")
+
+        rating = listening_screen.update_and_draw()
+        # samples follow a fixed schedule so the rate does not drift with frame timing
+        if t >= next_sample_time:
+            samples.append((t, rating))
+            while next_sample_time <= t:
+                next_sample_time += sample_period
+        win.flip()
+
+        if ui.poll_control_keys():
+            skipped = True
+            break
+    return audio_onset_time, skipped
 
 
+def run_trial(win, listening_screen, pupil, logs, block, trial_num, audio_path):
+    stimulus_file = os.path.basename(audio_path)
+    audio = sound.Sound(audio_path)
+    audio_duration = audio.getDuration()
+    n_chords = max(0, int((audio_duration - config.COUNTDOWN_DURATION) // config.CHORD_DURATION))
+    print(f"Trial {trial_num} [{block}]: {stimulus_file}  "
+          f"duration={audio_duration:.2f}s  chords={n_chords}")
 
-    # ─────────────────────────────────────────
-    # TRIAL LOOP
-    # ─────────────────────────────────────────
-    stimuli = load_stimuli(STIMULI_DIR)
-    print(f"Found {len(stimuli)} audio files in '{STIMULI_DIR}'")
-    for trial_num, stim in enumerate(stimuli):
-
-        audio_path = os.path.join(STIMULI_DIR, stim["audio_file"])
-        trial_id = str(trial_num + 1)
-
-        audio = sound.Sound(audio_path)
-        # use the file's REAL length instead of a hard-coded 31.2 s
-        total_audio_duration = audio.getDuration()
-        n_chords = max(0, int((total_audio_duration - COUNTDOWN_DURATION) // CHORD_DURATION))
-        chord_onset_times = [
-            COUNTDOWN_DURATION + c * CHORD_DURATION
-            for c in range(n_chords)
-        ]
-        print(f"Trial {trial_id}: {stim['audio_file']}  "
-              f"duration={total_audio_duration:.2f}s  chords={n_chords}")
-        if pupil_connected:
-            zmq_pub.close()
-            zmq_pub = zmq_ctx.socket(zmq.PUB)
-            zmq_pub.connect(f"tcp://{PUPIL_CAPTURE_IP}:{zmq_pub_port}")
-            sleep(1.0)
-            start_pupil_recording(zmq_remote, f"sub-{pid}_trial-{trial_num + 1}")
-            sleep(0.25)
-            send_annotation(zmq_pub, f"trial_{trial_num + 1}_start")
-            sleep(0.25)
-        continuous_slider.reset()
-
-        trial_clock     = core.Clock()
-        next_chord_idx  = 0
-        continuous_rows = []
-
-        # audio onset and clock zero are both locked to the first screen flip,
-        # so chord_onset_times line up with what the participant actually hears
-        win.callOnFlip(audio.play)
-        win.callOnFlip(trial_clock.reset)
-
-        # ── listening loop — advance LOCKED until audio ends ──
-        while True:
-            t = trial_clock.getTime()
-            if t >= total_audio_duration + 0.1:
-                break
-
-            # Pupil Capture annotation at each chord onset
-            if next_chord_idx < n_chords:
-                if t >= chord_onset_times[next_chord_idx]:
-                    chord_num = next_chord_idx + 1
-                    label = f"trial_{trial_id}_chord_{chord_num}"
-                    if pupil_connected:
-                        try:
-                            send_annotation(zmq_pub, label)
-                            print(f"Annotation sent: {label} at t={round(t,4)}")
-                        except Exception as e:
-                            print(f"Annotation error: {e}")
-                    next_chord_idx += 1
-
-
-
-            listen_instruction.draw()
-            rating_label.draw()
-            locked_msg.draw()
-            continuous_slider.update()
-            continuous_slider.draw()
-            current_pos = continuous_slider.getRating()
-            if t >= COUNTDOWN_DURATION:
-                # continuous_rows collects tuples of (value, time)
-                if not continuous_rows or (t - continuous_rows[-1][1]) >= 1.0/SLIDER_SAMPLING_HZ:
-                    # "NA" = participant hasn't touched the slider yet
-                    continuous_rows.append(("NA" if current_pos is None else current_pos, t))
-            win.flip()
-
-            if event.getKeys(["escape"]):
-                audio.stop()
-                csvfile.close()
-                if pupil_connected:
-                    stop_pupil_recording(zmq_remote)
-                win.close()
-                core.quit()
-
+    pupil.start_recording(f"sub-{logs.participant_id}_trial-{trial_num}")
+    trial_start_annotation_time = pupil.annotate(f"trial_{trial_num}_start")
+    dropped_frames_before = win.nDroppedFrames
+    samples = []
+    try:
+        audio_onset_time, skipped = play_with_continuous_rating(
+            win, listening_screen, pupil, audio, trial_num, n_chords, samples)
+    finally:
         audio.stop()
-        if pupil_connected:
-            stop_pupil_recording(zmq_remote)
-        csvfile.flush()
-        win.flip()
-        core.wait(0.5)
-
-
-        # ── overall pleasantness ──
-        overall_pleasantness = get_overall_rating(
-            win,
-            "Rate how pleasant or unpleasant the whole sequence sounded to you overall.\n\n"
-            "Evaluate \"pleasantness\" in terms of aesthetics rather than emotions.",
-            overall_slider
-        )
-
-        # ── overall arousal (NEW) ──
-        overall_arousal = get_overall_rating(
-            win,
-            "How arousing did you find that sequence overall?\n\n"
-            "(1 = Not at all arousing,  6 = Very arousing)",
-            overall_slider
-        )
-
-# ── write to CSV ──
-        if not continuous_rows:   # make sure overall ratings are never lost
-            continuous_rows = [("NA", "")]
-        for (rating_val, t) in continuous_rows:
-            chord_at_sample = None
-            if t != "" and t >= COUNTDOWN_DURATION:
-                idx = int((t - COUNTDOWN_DURATION) / CHORD_DURATION)
-                chord_at_sample = max(1, min(idx + 1, n_chords))
-            writer.writerow({
-                "participant_id":          pid,
-                "session":                 session,
-                "trial_num":               trial_num + 1,
-                "trial_id":                trial_id,
-                "stimulus_file":           stim["audio_file"],
-                "audio_duration":          round(total_audio_duration, 3),
-                "n_chords":                n_chords,
-                "sample_time":             round(t, 4) if t != "" else "",
-                "chord_num_at_sample":     chord_at_sample,
-                "pleasantness_continuous": rating_val,
-                "overall_pleasantness":    overall_pleasantness,
-                "overall_arousal":         overall_arousal,
-            })
-
-        # Brief inter-trial blank, first write to file after every trial
-        csvfile.flush()  # write to file
-        win.flip()
-        core.wait(0.5)
-
-    # ─────────────────────────────────────────
-    # END OF EXPERIMENT
-    # ─────────────────────────────────────────
-    end_screen = visual.TextStim(
-        win,
-        text=(
-            "Thank you for completing the listening task!\n\n"
-            "You will now answer a few brief questionnaires.\n\n"
-            "Press SPACE to continue."
-        ),
-        pos=(0, 0), height=0.06,
-        color="white", wrapWidth=1.6, alignText="center"
-    )
-    end_screen.draw()
+        pupil.stop_recording()
+        # saved before the post-trial questions, and also when the quit key interrupts playback
+        logs.continuous.write_rows({
+            "block": block, "trial_num": trial_num, "stimulus_file": stimulus_file,
+            "sample_num": sample_num, "sample_time": round(t, 4),
+            "chord_num_at_sample": chord_at(t, n_chords), "pleasantness_continuous": rating,
+        } for sample_num, (t, rating) in enumerate(samples, start=1))
+    n_dropped_frames = win.nDroppedFrames - dropped_frames_before
     win.flip()
-    event.waitKeys(keyList=["space"])
+    core.wait(0.5)
 
-    # Demographics placeholder
-    for q in ["What is your age?", "What is your gender?"]:
-        dlg = gui.Dlg(title="Questionnaire")
-        dlg.addField(q)
-        dlg.show()
+    overall_pleasantness, pleasantness_rt = screens.run_overall_rating(win, content.OVERALL_PLEASANTNESS_PROMPT)
+    overall_arousal, arousal_rt = screens.run_overall_rating(win, content.OVERALL_AROUSAL_PROMPT)
+    recognized_song, recognized_song_name = screens.run_familiarity(win)
 
-    farewell = visual.TextStim(
-        win,
-        text="The study is now complete.\nThank you for your participation!",
-        pos=(0, 0), height=0.07, color="white"
-    )
+    logs.trials.write_row({
+        "block": block, "trial_num": trial_num, "stimulus_file": stimulus_file,
+        "audio_duration": round(audio_duration, 3), "n_chords": n_chords,
+        "audio_onset_time": round(audio_onset_time, 4),
+        "trial_start_annotation_time": trial_start_annotation_time,
+        "slider_touched": any(rating is not None for _, rating in samples),
+        "n_continuous_samples": len(samples), "n_dropped_frames": n_dropped_frames,
+        "overall_pleasantness": overall_pleasantness, "overall_pleasantness_rt": round(pleasantness_rt, 3),
+        "overall_arousal": overall_arousal, "overall_arousal_rt": round(arousal_rt, 3),
+        "recognized_song": recognized_song, "recognized_song_name": recognized_song_name,
+        "skipped": skipped, "completed_wallclock": datetime.now().isoformat(timespec="seconds"),
+    })
+    win.flip()
+    core.wait(config.INTER_TRIAL_INTERVAL)
+
+
+def run_pupil_baseline(win, pupil, logs):
+    pupil.start_recording(f"sub-{logs.participant_id}_baseline")
+    start_time = pupil.annotate("baseline_start", duration=config.BASELINE_DURATION)
+    try:
+        screens.show_baseline_screen(win, config.BASELINE_DURATION, content.BASELINE_MESSAGE)
+        end_time = pupil.annotate("baseline_end", duration=0)
+    finally:
+        pupil.stop_recording()
+    logs.update_session_info(baseline_annotation_times={"start": start_time, "end": end_time})
+
+# ─────────────────────────────────────────────
+# SESSION
+# ─────────────────────────────────────────────
+
+DECLINED = object()   # returned by the consent step to end the session early
+
+
+def run_session(win, pupil, logs, plan, item_orders):
+    """
+    Runs the full flow; returns the session status for the session JSON. The flow is one
+    list of steps (a screen, questionnaire or trial each), so the progress bar's total is
+    simply len(steps) and stays right when steps are added or removed.
+    """
+    listening_screen = screens.ListeningScreen(win, content.LISTENING_SCREEN_TEXT)
+    trial_nums = itertools.count(1)   # numbering continues across blocks; practice is trial 0
+
+    def consent():
+        consented, responses = screens.run_consent(win, content.CONSENT_TEXT, content.CONSENT_AGREEMENT)
+        logs.write_responses("consent", responses)
+        if not consented:
+            screens.show_text_page(win, "Thank you", content.NO_CONSENT_TEXT, next_label="Exit")
+            return DECLINED
+
+    def page(title, body, next_label="Next"):
+        return lambda: screens.show_text_page(win, title, body, next_label=next_label)
+
+    def trial(block, trial_num, audio_path):
+        return lambda: run_trial(win, listening_screen, pupil, logs, block, trial_num, audio_path)
+
+    def block(name):
+        return [trial(name, next(trial_nums), path) for path in plan[name]]
+
+    def questionnaire(name, run):
+        return lambda: logs.write_responses(name, run())
+
+    # Likert values are raw (1-7); reverse-keyed items are scored during analysis
+    steps = [
+        consent,
+        lambda: screens.run_audio_check(win, sound.Sound(config.VOLUME_CHECK_STIMULUS),
+                                        content.AUDIO_CHECK_TEXT),
+        page("Instructions", content.LISTENING_INSTRUCTIONS),
+        lambda: run_pupil_baseline(win, pupil, logs),
+        page("Practice", content.PRACTICE_INTRO, next_label="Start"),
+        trial("practice", 0, config.PRACTICE_STIMULUS),
+
+        page("Instructions", content.MAIN_TASK_INTRO, next_label="Start"),
+        *block("main_1"),
+
+        page(None, content.FIRST_HALF_DONE),
+        questionnaire("demographics", lambda: screens.run_demographics(win, content.GENDER_OPTIONS)),
+        questionnaire("bmrq", lambda: screens.run_matrix_questionnaire(
+            win, "bmrq", None, content.MATRIX_INSTRUCTION,
+            content.BMRQ_ITEMS, content.BMRQ_SCALE, order=item_orders["bmrq"])),
+
+        page(None, content.SECOND_HALF_INTRO, next_label="Start"),
+        *block("main_2"),
+
+        page(None, content.FINAL_QUESTIONNAIRE_INTRO),
+        questionnaire("gold_msi", lambda: screens.run_matrix_questionnaire(
+            win, "gold_msi", None, content.MATRIX_INSTRUCTION,
+            content.GOLD_MSI_ITEMS, content.GOLD_MSI_SCALE, order=item_orders["gold_msi"])),
+        questionnaire("gold_msi", lambda: screens.run_choice_questions(
+            win, "gold_msi", None, content.GOLD_MSI_TRAINING_QUESTIONS,
+            first_item_num=len(content.GOLD_MSI_ITEMS) + 1, order=item_orders["gold_msi_training"])),
+    ]
+
+    progress = ui.session_progress
+    progress.total = len(steps)
+    for step in steps:
+        if step() is DECLINED:
+            return "no_consent"
+        progress.step()
+
+    farewell = visual.TextStim(win, text="The study is now complete.\nThank you for your participation!",
+                               pos=(0, 0), height=0.07, color="white")
     farewell.draw()
     win.flip()
     core.wait(3)
+    return "completed"
 
-    csvfile.close()
-    if pupil_connected:
-        zmq_ctx.term()
-    win.close()
+
+def main():
+    participant_id, session = get_participant_info()
+    random_seed = random.randrange(2 ** 32)
+    rng = random.Random(random_seed)
+    plan = build_stimulus_plan(rng)
+    item_orders = {   # display order of questionnaire items (indices into survey_content lists)
+        "bmrq":              shuffled_range(len(content.BMRQ_ITEMS), rng),
+        "gold_msi":          shuffled_range(len(content.GOLD_MSI_ITEMS), rng),
+        "gold_msi_training": shuffled_range(len(content.GOLD_MSI_TRAINING_QUESTIONS), rng),
+    }
+    started = datetime.now()
+
+    logs = SessionLogs(config.OUTPUT_DIR, f"sub-{participant_id}_ses-{session}_{started:%Y%m%d_%H%M%S}",
+                       participant_id, session)
+    pupil = PupilCapture(config.USE_PUPIL, config.PUPIL_CAPTURE_IP, config.PUPIL_CAPTURE_PORT)
+    win = open_window()
+    logs.update_session_info(
+        participant_id=participant_id, session=session, status="running",
+        start_wallclock=started.isoformat(timespec="seconds"),
+        machine=config.MACHINE, pupil_connected=pupil.connected,
+        psychopy_version=psychopy.__version__, python_version=platform.python_version(),
+        platform=platform.platform(), window_size=[int(px) for px in win.size],
+        frame_rate=win.getActualFrameRate(), random_seed=random_seed,
+        stimulus_order={block: [os.path.basename(p) for p in paths] for block, paths in plan.items()},
+        questionnaire_item_order={name: [i + 1 for i in order] for name, order in item_orders.items()},
+        config=config_snapshot(),
+    )
+
+    status = "error"   # kept if an unexpected exception escapes
+    try:
+        status = run_session(win, pupil, logs, plan, item_orders)
+    except ui.ExperimentAborted:
+        status = "aborted"
+        print("Session aborted with the quit key; recorded data is saved.")
+    finally:
+        pupil.close()
+        logs.update_session_info(status=status, end_wallclock=datetime.now().isoformat(timespec="seconds"))
+        logs.close()
+        win.close()
     core.quit()
 
 
 if __name__ == "__main__":
-    run_experiment()
+    main()

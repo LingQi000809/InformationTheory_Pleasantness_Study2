@@ -2,3 +2,10 @@ archive/
 idyom-*/
 stimuli_wav/
 .ipynb_checkpoints/
+__pycache__/
+screenshots/
+data/
+
+# Remove after finalizing stimuli
+stimuli_midi/
+stimuli_wav*/
