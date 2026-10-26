@@ -95,12 +95,10 @@ OVERALL_PLEASANTNESS_PROMPT = (
     "(1 = Very unpleasant,  6 = Very pleasant)"
 )
 
-# TODO: better explanation for arousal
 OVERALL_AROUSAL_PROMPT = (
     "How arousing did you find that sequence overall?\n\n"
-    "\"Arousal\" refers to how much the music captured your attention, "
-    "for example by being surprising or intense.\n\n"
-    "(1 = Not at all arousing,  6 = Very arousing)"
+    "**Evaluate “arousal” as how calm or energetic you perceive the music to be, regardless of your own mood.**\n\n"
+    "(1 = Very relaxing or dull,  6 = Very exciting or tense)"
 )
 
 PRACTICE_INTRO = (
