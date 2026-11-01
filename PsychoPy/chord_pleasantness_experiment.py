@@ -10,11 +10,12 @@ Session flow:
   -> Block 2 (second half) -> Gold-MSI
 
 Structure per trial:
+  0. Pupil baseline: "Please wait..." screen for TRIAL_BASELINE_DURATION (0.5 s)
   1. Audio file plays (countdown + chords at 2.4s each; length read from the file)
   2. Continuous pleasantness slider active throughout (advance LOCKED until audio ends)
   3. ZMQ annotations sent to Pupil Capture at each chord onset (after countdown)
   4. After audio: overall pleasantness rating (1-6)
-  5. After that: overall arousal rating (1-6)  <-- NEW addition
+  5. After that: overall arousal rating (1-6)
   6. Repeat for every .wav in STIMULI_DIR (random order)
 
 Requirements:
@@ -142,6 +143,17 @@ def chord_at(t, n_chords):
     return max(1, min(idx + 1, n_chords))
 
 
+def run_trial_baseline(win, pupil, trial_num):
+    """Baseline screen for TRIAL_BASELINE_DURATION right before audio onset.
+    Returns the time of the baseline annotation, sent on the screen's first frame."""
+    annotation_times = []
+    screens.show_baseline_screen(
+        win, config.TRIAL_BASELINE_DURATION, content.TRIAL_BASELINE_MESSAGE,
+        on_first_flip=lambda: annotation_times.append(pupil.annotate(
+            f"trial_{trial_num}_baseline", duration=config.TRIAL_BASELINE_DURATION)))
+    return annotation_times[0] if annotation_times else None
+
+
 def play_with_continuous_rating(win, listening_screen, pupil, audio, trial_num, n_chords, samples):
     """
     Plays the stimulus while sampling the continuous slider. Appends (trial_time,
@@ -202,6 +214,7 @@ def run_trial(win, listening_screen, pupil, logs, block, trial_num, audio_path):
     dropped_frames_before = win.nDroppedFrames
     samples = []
     try:
+        trial_baseline_annotation_time = run_trial_baseline(win, pupil, trial_num)
         audio_onset_time, skipped = play_with_continuous_rating(
             win, listening_screen, pupil, audio, trial_num, n_chords, samples)
     finally:
@@ -226,6 +239,7 @@ def run_trial(win, listening_screen, pupil, logs, block, trial_num, audio_path):
         "audio_duration": round(audio_duration, 3), "n_chords": n_chords,
         "audio_onset_time": round(audio_onset_time, 4),
         "trial_start_annotation_time": trial_start_annotation_time,
+        "trial_baseline_annotation_time": trial_baseline_annotation_time,
         "slider_touched": any(rating is not None for _, rating in samples),
         "n_continuous_samples": len(samples), "n_dropped_frames": n_dropped_frames,
         "overall_pleasantness": overall_pleasantness, "overall_pleasantness_rt": round(pleasantness_rt, 3),

@@ -109,6 +109,8 @@ PRACTICE_INTRO = (
 # Shown during the pupil baseline; deliberately reads like a loading message, not an instruction
 BASELINE_MESSAGE = "Preparing the experiment, please wait..."
 
+TRIAL_BASELINE_MESSAGE = ""   # shown before each sequence
+
 MAIN_TASK_INTRO = (
     "The practice is over. The main listening task starts now.\n\n"
     "If anything about the task is unclear, please ask the experimenter before you click “Start”."

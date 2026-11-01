@@ -132,14 +132,17 @@ def run_audio_check(win, audio, body):
     audio.stop()
 
 
-def show_baseline_screen(win, duration, message):
+def show_baseline_screen(win, duration, message, on_first_flip=None):
     """`message` at the listening-screen instruction position above a bare, non-interactive
-    copy of the listening-screen slider, so layout and luminance match the listening screen."""
+    copy of the listening-screen slider, so layout and luminance match the listening screen.
+    `on_first_flip` runs when the screen first appears (e.g. to send a pupil annotation)."""
     slider = ui.ContinuousSlider(win, event.Mouse(win=win), show_labels=False, show_marker=False)
     message_stim = visual.TextStim(win, text=message, pos=(0, 0.55), height=0.05,
                                    color="white", wrapWidth=1.7, alignText="center")
     clock = core.Clock()
     win.callOnFlip(clock.reset)
+    if on_first_flip:
+        win.callOnFlip(on_first_flip)
     while clock.getTime() < duration:
         message_stim.draw()
         slider.draw()

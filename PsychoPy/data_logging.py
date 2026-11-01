@@ -30,6 +30,7 @@ CONTINUOUS_FIELDS = [
 TRIAL_FIELDS = [
     "participant_id", "session", "block", "trial_num", "stimulus_file",
     "audio_duration", "n_chords", "audio_onset_time", "trial_start_annotation_time",
+    "trial_baseline_annotation_time",
     "slider_touched", "n_continuous_samples", "n_dropped_frames",
     "overall_pleasantness", "overall_pleasantness_rt",
     "overall_arousal", "overall_arousal_rt",

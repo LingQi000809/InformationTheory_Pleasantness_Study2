@@ -68,7 +68,8 @@ COUNTDOWN_DURATION = 4.8    # tonic chord (2.4 s) + one bar of 4 clicks (2.4 s)
 # PROCEDURE
 # ─────────────────────────────────────────────
 
-BASELINE_DURATION     = 10    # seconds of the pupil baseline ("please wait" screen after the practice)
+BASELINE_DURATION     = 2    # seconds of the pupil baseline ("please wait" screen after the practice)
+TRIAL_BASELINE_DURATION = 2  # seconds of the baseline screen right before each stimulus
 INTER_TRIAL_INTERVAL  = 0.5   # seconds of blank screen after each trial
 SLIDER_SAMPLING_HZ    = 5     # continuous-rating samples per second
 
