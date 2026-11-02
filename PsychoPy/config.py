@@ -25,16 +25,20 @@ MACHINE = "laptop"
 
 FULLSCREEN = True   # False = resizable window (handy for debugging next to the console)
 
-# TODO: update audio device for booth computer to use the speaker.
+# AUDIO_LIB: the booth's MOTU M4 ("Audio Out") is a 4-output interface. PsychoPy's ptb backend
+# opens every output channel but only sends 2-channel audio, so it crashes with "Number of columns
+# of audio data matrix doesn't match". The sounddevice backend opens a stereo stream (outs 1-2).
 MACHINE_PROFILES = {
     "booth": {
         "USE_PUPIL":    True,
-        "AUDIO_DEVICE": "Speakers (Realtek(R) Audio)",   # run PsychoPy's sound test to find the right name
+        "AUDIO_DEVICE": "Audio Out",                     # MOTU M4; names: python -c "import sounddevice as sd; print(sd.query_devices())"
+        "AUDIO_LIB":    ["sounddevice"],
         "MONITOR_NAME": "testMonitor",                   # must match a profile in PsychoPy Monitor Center
     },
     "laptop": {
         "USE_PUPIL":    False,
         "AUDIO_DEVICE": "External Headphones", 
+        "AUDIO_LIB":    ["ptb", "sounddevice"],
         "MONITOR_NAME": "testMonitor",
     },
 }
@@ -43,7 +47,7 @@ _profile     = MACHINE_PROFILES[MACHINE]
 USE_PUPIL    = _profile["USE_PUPIL"]
 AUDIO_DEVICE = _profile["AUDIO_DEVICE"]
 MONITOR_NAME = _profile["MONITOR_NAME"]
-AUDIO_LIB    = ["ptb", "sounddevice"]
+AUDIO_LIB    = _profile["AUDIO_LIB"]
 
 PUPIL_CAPTURE_IP   = "127.0.0.1"
 PUPIL_CAPTURE_PORT = 50020

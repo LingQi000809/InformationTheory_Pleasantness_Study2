@@ -10,7 +10,7 @@ Session flow:
   -> Block 2 (second half) -> Gold-MSI
 
 Structure per trial:
-  0. Pupil baseline: "Please wait..." screen for TRIAL_BASELINE_DURATION (0.5 s)
+  0. Pupil baseline: "Please wait..." screen for TRIAL_BASELINE_DURATION
   1. Audio file plays (countdown + chords at 2.4s each; length read from the file)
   2. Continuous pleasantness slider active throughout (advance LOCKED until audio ends)
   3. ZMQ annotations sent to Pupil Capture at each chord onset (after countdown)
