@@ -21,7 +21,7 @@ OUTPUT_DIR            = "data"
 #   "laptop": no eye tracker; for debugging and checking the flow
 # ─────────────────────────────────────────────
 
-MACHINE = "laptop"
+MACHINE = "booth"
 
 FULLSCREEN = True   # False = resizable window (handy for debugging next to the console)
 
@@ -56,7 +56,8 @@ PUPIL_CAPTURE_PORT = 50020
 # TESTING SHORTCUTS
 # ─────────────────────────────────────────────
 
-ALLOW_SKIP = MACHINE == "laptop"   # SKIP_KEY jumps past the current page or trial; skipped answers are logged as NA
+# TODO: change to false for final experiment
+ALLOW_SKIP = True   # SKIP_KEY jumps past the current page or trial; skipped answers are logged as NA
 SKIP_KEY   = "right"
 QUIT_KEY   = "escape"              # always active: ends the session cleanly and saves everything recorded so far
 

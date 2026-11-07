@@ -2,6 +2,7 @@ archive/
 idyom-*/
 stimuli_wav/
 .ipynb_checkpoints/
+.DS_Store
 __pycache__/
 screenshots/
 data/
