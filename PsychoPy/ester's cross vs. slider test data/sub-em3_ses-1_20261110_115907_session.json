@@ -1,0 +1,104 @@
+{
+  "participant_id": "em3",
+  "session": "1",
+  "status": "completed",
+  "start_wallclock": "2026-11-10T11:59:07",
+  "machine": "booth",
+  "pupil_connected": true,
+  "psychopy_version": "2026.2.4",
+  "python_version": "3.11.9",
+  "platform": "macOS-26.7.2-x86_64-i386-64bit",
+  "window_size": [
+    4096,
+    2304
+  ],
+  "frame_rate": 60.021004950878606,
+  "random_seed": 2860693396,
+  "mini_test_order": [
+    {
+      "trial_num": 1,
+      "condition": "slider",
+      "stimulus_file": "study0_1_0_Bb_O.wav"
+    },
+    {
+      "trial_num": 2,
+      "condition": "slider",
+      "stimulus_file": "study0_2_0_Bb_O.wav"
+    },
+    {
+      "trial_num": 3,
+      "condition": "fixation",
+      "stimulus_file": "study0_1_0_Bb_O.wav"
+    },
+    {
+      "trial_num": 4,
+      "condition": "fixation",
+      "stimulus_file": "study0_2_0_Bb_O.wav"
+    }
+  ],
+  "config": {
+    "ACCENT_COLOR": "#3B78C2",
+    "ALLOW_SKIP": "TRUE",
+    "AUDIO_DEVICE": "iMac Speakers",
+    "AUDIO_LIB": [
+      "ptb",
+      "sounddevice"
+    ],
+    "BASELINE_DURATION": 2,
+    "BORDER_COLOR": "#5A5A60",
+    "CARD_COLOR": "#1C1C1F",
+    "CHORD_DURATION": 2.4,
+    "CONTINUOUS_SCALE_MAX": 100,
+    "CONTINUOUS_SCALE_MIN": -100,
+    "CONTINUOUS_SCALE_START": 0,
+    "COUNTDOWN_DURATION": 4.8,
+    "DEBUG_SLIDER": false,
+    "DISABLED_COLOR": "#4A4A4E",
+    "ERROR_COLOR": "#E0736B",
+    "FONT": "Arial",
+    "FULLSCREEN": true,
+    "INTER_TRIAL_INTERVAL": 0.5,
+    "MACHINE": "booth",
+    "MACHINE_PROFILES": {
+      "booth": {
+        "USE_PUPIL": true,
+        "AUDIO_DEVICE": "iMac Speakers",
+        "MONITOR_NAME": "testMonitor"
+      },
+      "laptop": {
+        "USE_PUPIL": false,
+        "AUDIO_DEVICE": "External Headphones",
+        "MONITOR_NAME": "testMonitor"
+      }
+    },
+    "MONITOR_NAME": "testMonitor",
+    "MUTED_COLOR": "#9A9AA0",
+    "N_COUNTDOWN_TICKS": 4,
+    "OUTPUT_DIR": "data",
+    "OVERALL_SCALE": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "PRACTICE_STIMULUS": "stimuli_others/practice.wav",
+    "PUPIL_CAPTURE_IP": "127.0.0.1",
+    "PUPIL_CAPTURE_PORT": 50020,
+    "QUIT_KEY": "escape",
+    "SKIP_KEY": "right",
+    "SLIDER_SAMPLING_HZ": 5,
+    "STIMULI_DIR": "stimuli",
+    "STRIPE_COLOR": "#242428",
+    "TEXT_COLOR": "#F2F2F2",
+    "TRIAL_BASELINE_DURATION": 2,
+    "USE_PUPIL": true,
+    "VOLUME_CHECK_STIMULUS": "stimuli_others/C.wav"
+  },
+  "baseline_annotation_times": {
+    "start": 37.82016690799992,
+    "end": 39.869179827999915
+  },
+  "end_wallclock": "2026-11-10T12:05:59"
+}

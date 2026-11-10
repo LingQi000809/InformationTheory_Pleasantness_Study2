@@ -1,0 +1,5 @@
+participant_id,trial_num,condition,stimulus_file,audio_onset_time,trial_start_annotation_time,trial_baseline_annotation_time
+em3,1,slider,study0_1_0_Bb_O.wav,45.6879,43.63916068100002,43.67002291099993
+em3,2,slider,study0_2_0_Bb_O.wav,144.1323,142.08287035600006,142.11537853599998
+em3,3,fixation,study0_1_0_Bb_O.wav,242.594,240.55318169099996,240.57707524900002
+em3,4,fixation,study0_2_0_Bb_O.wav,341.8059,339.7671575710001,339.788226959

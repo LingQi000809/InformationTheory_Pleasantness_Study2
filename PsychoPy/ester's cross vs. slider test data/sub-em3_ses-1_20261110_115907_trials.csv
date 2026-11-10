@@ -1,0 +1,5 @@
+participant_id,session,block,trial_num,stimulus_file,audio_duration,n_chords,audio_onset_time,trial_start_annotation_time,trial_baseline_annotation_time,slider_touched,n_continuous_samples,n_dropped_frames,overall_pleasantness,overall_pleasantness_rt,overall_arousal,overall_arousal_rt,recognized_song,recognized_song_name,skipped,completed_wallclock
+em3,1,slider,1,study0_1_0_Bb_O.wav,86.4,34,45.6879,43.63916068100002,43.67002291099993,True,409,1,5,1.667,5,1.084,no,,False,2026-11-10T12:00:59
+em3,1,slider,2,study0_2_0_Bb_O.wav,86.4,34,144.1323,142.08287035600006,142.11537853599998,True,409,1,4,1.634,4,1.117,no,,False,2026-11-10T12:02:38
+em3,1,fixation,3,study0_1_0_Bb_O.wav,86.4,34,242.594,240.55318169099996,240.57707524900002,False,0,1,5,2.634,5,1.05,no,,False,2026-11-10T12:04:17
+em3,1,fixation,4,study0_2_0_Bb_O.wav,86.4,34,341.8059,339.7671575710001,339.788226959,False,0,1,NA,1.523,NA,2.317,NA,NA,False,2026-11-10T12:05:55
