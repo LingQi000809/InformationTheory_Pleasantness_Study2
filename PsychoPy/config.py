@@ -21,9 +21,9 @@ OUTPUT_DIR            = "data"
 #   "laptop": no eye tracker; for debugging and checking the flow
 # ─────────────────────────────────────────────
 
-MACHINE = "booth"
+MACHINE = "laptop"
 
-FULLSCREEN = True   # False = resizable window (handy for debugging next to the console)
+FULLSCREEN = False   # False = resizable window (handy for debugging next to the console)
 
 # AUDIO_LIB: the booth's MOTU M4 ("Audio Out") is a 4-output interface. PsychoPy's ptb backend
 # opens every output channel but only sends 2-channel audio, so it crashes with "Number of columns
@@ -37,7 +37,7 @@ MACHINE_PROFILES = {
     },
     "laptop": {
         "USE_PUPIL":    False,
-        "AUDIO_DEVICE": "External Headphones", 
+        "AUDIO_DEVICE": "iMac Speakers",
         "AUDIO_LIB":    ["ptb", "sounddevice"],
         "MONITOR_NAME": "testMonitor",
     },

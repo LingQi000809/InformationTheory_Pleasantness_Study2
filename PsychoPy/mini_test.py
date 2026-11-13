@@ -5,9 +5,10 @@ Flow:
   Audio check -> Instructions -> Pupil baseline -> 4 trials in RANDOM order
 
 The 4 trials = 2 stimuli x 2 conditions:
-  * "slider"   : Ling's original trial (baseline "Please wait..." screen 0.5 s,
-                 audio + continuous slider, overall pleasantness/arousal/familiarity)
-  * "fixation" : -> cross fixation
+  * "slider"   : baseline = bare slider (0.5 s, no text, no marker), then audio +
+                 Ling's continuous slider with NO text on screen, then overall
+                 pleasantness/arousal/familiarity
+  * "fixation" : baseline = fixation cross, then audio + cross
 
 
 Needs chord_pleasantness_experiment.py (Ling's file) and her helper modules
@@ -46,6 +47,9 @@ FIX_ARM_LENGTH = 0.05
 FIX_THICKNESS = 0.006
 FIX_COLOR = "white"
 
+# Slider position (same units as Ling's ui.ContinuousSlider, norm). (0, 0) = screen center.
+SLIDER_POS = (0, 0)
+
 
 # ─────────────────────────────────────────────
 # FIXATION CROSS
@@ -60,6 +64,72 @@ class Fixation:
     def draw(self):
         self.h.draw()
         self.v.draw()
+
+
+# ─────────────────────────────────────────────
+# TEXT-FREE SLIDER (Ling's ui.ContinuousSlider, no labels, no other text)
+# ─────────────────────────────────────────────
+class CenteredSlider:
+    """Ling's continuous slider (same look and rating range), centered, labels hidden.
+    Nothing but the slider is drawn."""
+
+    def __init__(self, win):
+        mouse = event.Mouse(win=win)
+        self.slider = ui.ContinuousSlider(win, mouse, pos=SLIDER_POS, show_labels=False)
+        # bare copy for the baseline: same geometry/luminance, no marker
+        self.bare = ui.ContinuousSlider(win, mouse, pos=SLIDER_POS,
+                                        show_labels=False, show_marker=False)
+
+    def reset(self):
+        self.slider.reset()
+
+    def update_and_draw(self):
+        """Draws one frame; returns the current rating (None until touched)."""
+        self.slider.update()
+        self.slider.draw()
+        return self.slider.getRating()
+
+    def draw_bare(self):
+        self.bare.draw()
+
+
+def show_baseline_centered(win, duration, message, on_first_flip=None):
+    """Drop-in replacement for screens.show_baseline_screen: ignores `message` and shows
+    only the bare, non-interactive slider at SLIDER_POS (no text)."""
+    slider = ui.ContinuousSlider(win, event.Mouse(win=win), pos=SLIDER_POS,
+                                 show_labels=False, show_marker=False)
+    clock = core.Clock()
+    win.callOnFlip(clock.reset)
+    if on_first_flip:
+        win.callOnFlip(on_first_flip)
+    while clock.getTime() < duration:
+        slider.draw()
+        win.flip()
+        if ui.poll_control_keys():
+            return
+
+
+# Any "Please wait..." screen in Ling's code (e.g. the pupil baseline at the very start)
+# goes through screens.show_baseline_screen, so swap it for the text-free centered slider.
+screens.show_baseline_screen = show_baseline_centered
+if hasattr(ling, "show_baseline_screen"):          # in case she imported it by name
+    ling.show_baseline_screen = show_baseline_centered
+
+
+def run_trial_baseline_slider(win, pupil, slider, trial_num):
+    """Same as Ling's run_trial_baseline (TRIAL_BASELINE_DURATION, annotation on the first
+    frame), but the screen shows only the bare centered slider, no text."""
+    annotation_times = []
+    slider.draw_bare()
+    win.callOnFlip(lambda: annotation_times.append(
+        pupil.annotate(f"trial_{trial_num}_baseline", duration=config.TRIAL_BASELINE_DURATION)))
+    win.flip()
+    clock = core.Clock()
+    while clock.getTime() < config.TRIAL_BASELINE_DURATION:
+        slider.draw_bare()
+        win.flip()
+        ui.poll_control_keys()
+    return annotation_times[0] if annotation_times else None
 
 
 def run_trial_baseline_cross(win, pupil, fixation, trial_num):
@@ -78,7 +148,6 @@ def run_trial_baseline_cross(win, pupil, fixation, trial_num):
 
 
 def play_with_fixation(win, fixation, pupil, audio, trial_num, n_chords):
- 
     chord_onset_times = [config.COUNTDOWN_DURATION + c * config.CHORD_DURATION
                          for c in range(n_chords)]
     next_chord_idx = 0
@@ -107,6 +176,40 @@ def play_with_fixation(win, fixation, pupil, audio, trial_num, n_chords):
     return audio_onset_time, skipped
 
 
+def play_with_centered_slider(win, slider, pupil, audio, trial_num, n_chords, samples):
+    """Same timing logic as play_with_fixation, but draws only the centered
+    slider (no text) and appends (time, rating) to `samples` every frame."""
+    chord_onset_times = [config.COUNTDOWN_DURATION + c * config.CHORD_DURATION
+                         for c in range(n_chords)]
+    next_chord_idx = 0
+    skipped = False
+
+    slider.reset()
+    win.mouseVisible = True
+    trial_clock = core.Clock()
+    win.callOnFlip(audio.play)
+    win.callOnFlip(trial_clock.reset)
+    slider.update_and_draw()
+    win.flip()
+    audio_onset_time = core.monotonicClock.getTime() - trial_clock.getTime()
+
+    duration = audio.getDuration()
+    while True:
+        t = trial_clock.getTime()
+        if t >= duration + 0.1:
+            break
+        if next_chord_idx < n_chords and t >= chord_onset_times[next_chord_idx]:
+            next_chord_idx += 1
+            pupil.annotate(f"trial_{trial_num}_chord_{next_chord_idx}")
+        rating = slider.update_and_draw()
+        win.flip()
+        samples.append((t, rating))
+        if ui.poll_control_keys():
+            skipped = True
+            break
+    return audio_onset_time, skipped
+
+
 # ─────────────────────────────────────────────
 # TRIAL
 # ─────────────────────────────────────────────
@@ -121,7 +224,7 @@ def show_cue(win, text):
         raise ui.ExperimentAborted()
 
 
-def run_mini_trial(win, listening_screen, fixation, pupil, logs, cond_writer, cond_file,
+def run_mini_trial(win, slider, fixation, pupil, logs, cond_writer, cond_file,
                    trial_num, audio_path, condition):
     stimulus_file = os.path.basename(audio_path)
     audio = sound.Sound(audio_path)
@@ -136,9 +239,9 @@ def run_mini_trial(win, listening_screen, fixation, pupil, logs, cond_writer, co
     samples = []
     try:
         if condition == "slider":
-            baseline_time = ling.run_trial_baseline(win, pupil, trial_num)
-            audio_onset_time, skipped = ling.play_with_continuous_rating(
-                win, listening_screen, pupil, audio, trial_num, n_chords, samples)
+            baseline_time = run_trial_baseline_slider(win, pupil, slider, trial_num)
+            audio_onset_time, skipped = play_with_centered_slider(
+                win, slider, pupil, audio, trial_num, n_chords, samples)
         else:
             baseline_time = run_trial_baseline_cross(win, pupil, fixation, trial_num)
             audio_onset_time, skipped = play_with_fixation(
@@ -235,13 +338,13 @@ CUE_TEXT = {
 
 
 def run_mini_session(win, pupil, logs, plan, cond_writer, cond_file):
-    listening_screen = screens.ListeningScreen(win, content.LISTENING_SCREEN_TEXT)
+    slider = CenteredSlider(win)
     fixation = Fixation(win)
 
     def trial_step(trial_num, path, condition):
         def step():
             show_cue(win, CUE_TEXT[condition])
-            run_mini_trial(win, listening_screen, fixation, pupil, logs, cond_writer, cond_file,
+            run_mini_trial(win, slider, fixation, pupil, logs, cond_writer, cond_file,
                            trial_num, path, condition)
         return step
 
